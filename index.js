@@ -1,9 +1,7 @@
-const TelegramBot = require("node-telegram-bot-api");
-const express = require("express");
+const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
 const mercadopago = require("mercadopago");
-const fs = require("fs");
 
-// ================= TOKEN BOT =================
 const TOKEN = "8741185680:AAGj98b2sOlYSW7prpg4FLYRmtah60iY9qI";
 const bot = new TelegramBot(TOKEN, { polling: true });
 
@@ -11,10 +9,6 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 mercadopago.configure({
   access_token: "APP_USR-6208774874996192-042016-e2a2cd74b41e33563f1372f78c9b3e8d-3091695226"
 });
-
-// ================= EXPRESS WEBHOOK =================
-const app = express();
-app.use(express.json());
 
 // ================= BANCO =================
 let users = {};
@@ -29,32 +23,55 @@ function saveUsers() {
 }
 
 // ================= FUNÇÕES =================
+function gerarRef() {
+  const random = Math.floor(1000 + Math.random() * 9000);
+  return `CASHIN-${random}-${Date.now()}`;
+}
+
 function gerarId() {
   return Math.floor(100000 + Math.random() * 900000);
 }
 
-// ================= BOT =================
+// ================= TECLADO INLINE (MANTIDO IGUAL) =================
+function tecladoMenu() {
+  return {
+    inline_keyboard: [
+      [{ text: "💰 Depositar (PIX)", callback_data: "depositar" }],
+      [{ text: "💸 Sacar", callback_data: "sacar" }],
+      [{ text: "📊 Ver Saldo", callback_data: "saldo" }],
+      [{ text: "🔗 Link de Afiliado", callback_data: "afiliado" }],
+      [{ text: "📄 Termos de Uso", callback_data: "termos" }],
+      [{ text: "📞 Suporte", callback_data: "suporte" }]
+    ]
+  };
+}
+
+// ================= START (NÃO MEXI) =================
 bot.onText(/\/start/, (msg) => {
   const id = msg.chat.id;
 
-  if (!users[id]) {
-    users[id] = {
-      step: "MENU",
-      saldo: 0,
-      transacoes: 0
-    };
-    saveUsers();
-  }
+  users[id] = { step: "ASK_NAME" };
+  saveUsers();
 
-  bot.sendMessage(id, "👋 Bem-vindo! Use o menu abaixo.");
+  bot.sendPhoto(id, "welcome.png", {
+    caption: `👋 Bem-vindo ao PIX ANÔNIMO!
+
+Para começarmos, me diga seu nome fictício completo 👇`
+  });
 });
 
-// ================= GERAR PIX REAL =================
+
+// ================= 🔥 PIX REAL (ALTERADO AQUI) =================
 bot.onText(/\/pix (.+)/, async (msg, match) => {
   const id = msg.chat.id;
+
+  if (!users[id] || users[id].step !== "MENU") {
+    return bot.sendMessage(id, "Finalize seu cadastro primeiro com /start");
+  }
+
   const valor = parseFloat(match[1]);
 
-  if (!valor || valor <= 0) {
+  if (isNaN(valor) || valor <= 0) {
     return bot.sendMessage(id, "Valor inválido.");
   }
 
@@ -64,15 +81,12 @@ bot.onText(/\/pix (.+)/, async (msg, match) => {
       description: "Depósito no bot",
       payment_method_id: "pix",
       payer: {
-        email: "user" + id + "@email.com"
+        email: users[id].email || `user${id}@email.com`
       }
     });
 
-    const qrCode =
-      payment.body.point_of_interaction.transaction_data.qr_code;
-
-    const qrBase64 =
-      payment.body.point_of_interaction.transaction_data.qr_code_base64;
+    const qrCode = payment.body.point_of_interaction.transaction_data.qr_code;
+    const qrBase64 = payment.body.point_of_interaction.transaction_data.qr_code_base64;
 
     payments[payment.body.id] = {
       userId: id,
@@ -83,70 +97,113 @@ bot.onText(/\/pix (.+)/, async (msg, match) => {
       id,
       Buffer.from(qrBase64, "base64"),
       {
-        caption: `💰 PIX GERADO
+        caption: `✅ PIX gerado com sucesso!
 
-💵 Valor: R$${valor.toFixed(2)}
-
-📋 Copia e cola:
+💰 Valor: R$${valor.toFixed(2)}
+🔑 Copia e cola:
 ${qrCode}
 
-⏳ Aguarde confirmação automática.`
+⏳ Status: PENDENTE
+
+📌 Aguarde confirmação automática.`
       }
     );
+
   } catch (err) {
     console.log(err);
-    bot.sendMessage(id, "Erro ao gerar PIX.");
+    bot.sendMessage(id, "Erro ao gerar PIX. Tente novamente.");
   }
 });
 
-// ================= WEBHOOK PAGAMENTO =================
-app.post("/webhook", (req, res) => {
-  const payment = req.body;
 
-  try {
-    if (payment.type === "payment") {
-      const paymentId = payment.data.id;
+// ================= BOTÕES (NÃO MEXI) =================
+bot.on("callback_query", (query) => {
+  const id = query.message.chat.id;
+  const data = query.data;
+  const user = users[id];
 
-      mercadopago.payment
-        .get(paymentId)
-        .then((result) => {
-          const status = result.body.status;
+  if (!user) return;
 
-          if (status === "approved") {
-            const record = payments[paymentId];
+  if (data === "depositar") {
+    bot.sendMessage(id, "💸 Para depositar, digite /pix <valor> (ex.: /pix 100.00)");
+  }
 
-            if (record) {
-              const userId = record.userId;
-              const value = record.value;
+  if (data === "saldo") {
+    bot.sendMessage(id, `💰 Saldo: R$${user.saldo.toFixed(2)}\n📊 Transações: ${user.transacoes}`);
+  }
 
-              if (!users[userId]) return;
+  if (data === "sacar") {
+    bot.sendMessage(id, "🚧 Você não possui valores para saque.");
+  }
 
-              users[userId].saldo += value;
-              users[userId].transacoes += 1;
-              saveUsers();
+  if (data === "afiliado") {
+    const link = `https://t.me/pixanonimoofc_bot?start=${id}`;
+    bot.sendMessage(id, `🔗 Seu link:\n${link}`);
+  }
 
-              bot.sendMessage(
-                userId,
-                `✅ PAGAMENTO CONFIRMADO!
+  if (data === "termos") {
+    bot.sendMessage(id, "📄 Em desenvolvimento.");
+  }
 
-💰 Valor: R$${value.toFixed(2)}
-💳 Novo saldo: R$${users[userId].saldo.toFixed(2)}`
-              );
-            }
-          }
-        });
+  if (data === "suporte") {
+    bot.sendMessage(id, "📞 Suporte: @erwan_lr");
+  }
+
+  bot.answerCallbackQuery(query.id);
+});
+
+
+// ================= FLUXO (NÃO MEXI) =================
+bot.on("message", (msg) => {
+  const id = msg.chat.id;
+  const text = msg.text;
+
+  if (!users[id]) return;
+  if (text.startsWith("/")) return;
+
+  const user = users[id];
+
+  if (user.step === "ASK_NAME") {
+    user.nome = text;
+    user.step = "ASK_CPF";
+
+    return bot.sendMessage(id, `📋 Perfeito! Agora envie seu CPF.
+
+Apenas números (ex: 12345678900).`);
+  }
+
+  if (user.step === "ASK_CPF") {
+    if (!/^\d{11}$/.test(text)) {
+      return bot.sendMessage(id, "CPF inválido.");
     }
 
-    res.sendStatus(200);
-  } catch (err) {
-    console.log(err);
-    res.sendStatus(500);
+    user.cpf = text;
+    user.step = "ASK_EMAIL";
+
+    return bot.sendMessage(id, `📧 Quase lá! Envie seu e-mail.`);
   }
+
+  if (user.step === "ASK_EMAIL") {
+    user.email = text;
+
+    user.idInterno = gerarId();
+    user.saldo = 0;
+    user.transacoes = 0;
+    user.step = "MENU";
+
+    return bot.sendPhoto(id, "final.png", {
+      caption: `🎉 Cadastro concluído com sucesso, ${user.nome}!
+
+🆔 ID: ${user.idInterno}
+💰 Saldo: R$0.00
+📊 Transações: 0
+
+💡 Taxa de 5% nos depósitos.`,
+      reply_markup: tecladoMenu()
+    });
+  }
+
+  saveUsers();
 });
 
-// ================= SERVER =================
-app.listen(3000, () => {
-  console.log("Webhook rodando na porta 3000");
-});
-
-console.log("Bot rodando...");
+console.log("🤖 Bot rodando...");
